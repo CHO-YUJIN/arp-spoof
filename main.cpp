@@ -267,7 +267,7 @@ int main(int argc, char* argv[]) {
          SendArp(handle, sendIP[i], Mac(mymac), targetIP[i], targetmac[i]);
          SendArp(handle, targetIP[i], Mac(mymac), sendIP[i], sendmac[i]);
       }
-      sleep(1000000);
+      sleep(60*5);
       printf("replay\n");
    }
    pcap_close(handle);
